@@ -1,0 +1,88 @@
+# **Practical Machine Learning project**
+
+##Loading required packages and Data
+
+```{r}
+library(caret)
+library(ggplot2)
+library(randomForest)
+
+test <- read.csv('pml-testing.csv')
+train <- read.csv('pml-training.csv')
+```
+##Cleaning & Exploration
+```{r}
+head(names(train[,colSums(is.na(train))!=0])) #some names for the variables that include NA values.
+```
+The dataset includes variables with a lot of missing values(NA) which seem to be inapropriate to use knn imputation as only some of the data in the variables is available for use. Also we can deduce that variables with user name, timestamp, index, window will not contribute much to the classification problem.
+```{r}
+subsettrain<-train[,(colSums(is.na(train)) == 0)] #remove NA values for training set
+subsettest<-test[,(colSums(is.na(train)) == 0)] #remove NA values for test set
+subseting <- !grepl('^X|user|window|kurtosis|skewness|timestamp|max_yaw|min_yaw|amplitude',names(subsettrain))
+trainclean <- subsettrain[,subseting] #remove other missing/invalid variables (training)
+testclean <- subsettest[,subseting] #remove other missing/invalid variables (test)
+```
+One other aspect to consider when building classifier is practicality of the classifier. We still have 53 variables and a lot of observation which could be troublesome as it takes too much time to train a classifier. What we can try is removing some variables that has high correlation which each other.
+```{r}
+heatmap(abs(cor(trainclean[1:52])))
+```
+We can see from the heatmap of variables that some variables have big correlation, suggesting that some variables can be removed. we will remove some variables that has correlation over .7
+```{r}
+training <- trainclean[,-findCorrelation(cor(trainclean[, 1:52]), cutoff = .7)]
+testing <- testclean[,-findCorrelation(cor(trainclean[, 1:52]), cutoff = .7)]
+```
+
+##Training classifier
+As mentioned above, the data set has very big dimension, which can be very hard to work with. Thus for this classifier, Principle Component Analysis will be used to reduce dimension of the data, then classification method will be implemented.
+
+###PCA
+Before we implement any method, we want to divide the training data into another training set and validation set.
+```{r}
+set.seed(123123)
+inTrain <- createDataPartition(training$classe,p=0.7,list=FALSE)
+training2 <- training[inTrain,]
+validation <- training[-inTrain,]
+```
+
+PCA dimension reduction and visualization for first two components (just for the visualization).
+```{r}
+prComp <- prcomp(training2[,1:30])
+qplot(prComp$x[,1],prComp$x[,2],colour=training2$classe) 
+summary(prComp)
+```
+We of course need more variable then two, 5 components seem to be enough to explain over 90% of variation
+
+###Random forest classifier
+Random forest is strong classifier which trains a lot of trees that votes for a class for each observation. Random forest method will be used for this classification.
+
+Our classifier will be controlled for gernalizability, as we optimize the classifier using cross-validation estimation for generalization error. 
+
+Train random forest classifier after preprocessing the principle component analysis.
+```{r}
+set.seed(123123)
+train_control <- trainControl(method="cv", number=10)
+pca <- preProcess(training2[,1:30],method='pca',pcaComp=5)
+trainpc <- predict(pca,training2[,1:30])
+trainpc$classe <- training2$classe
+modpca <- train(classe~.,data=trainpc,method='rf', trControl=train_control)
+```
+
+Valdiation set then will be used to find the accuracy and confusion matrix.
+```{r}
+testpc <- predict(pca,validation[1:30])
+testpc$classe <- validation$classe
+table(validation$classe,predict(modpca,testpc)) #confusion matrix
+mean(validation$classe==predict(modpca,testpc)) #accuracy
+```
+
+###Gradient boosting
+
+We try with bgm method in r with processed data (PCA)
+```{r}
+set.seed(12345)
+modgb <- train(classe~., data=trainpc,method='gbm',trControl=train_control,verbose=FALSE)
+confusionMatrix(validation$classe,predict(modgb,testpc))
+```
+Accuracy has been lowered (63 percent with validation set). We will keep our Random Forest classifier.
+
+
